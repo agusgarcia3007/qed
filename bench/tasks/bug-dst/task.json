@@ -1,0 +1,10 @@
+{
+  "id": "bug-dst",
+  "category": "bug",
+  "web": false,
+  "budget_s": 600,
+  "budget_usd": 3,
+  "prompt": "Bug report: a reminder set for 09:00 Europe/Madrid fires at 10:00 on the days after the clocks go back in October (and at 08:00 after they spring forward). Fix next_daily in schedule.py so it meets its docstring.",
+  "check": "python3 -m unittest -q test_schedule",
+  "hidden_cmd": "python3 -m unittest -q test_schedule test_hidden"
+}

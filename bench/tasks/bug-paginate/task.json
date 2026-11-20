@@ -1,0 +1,10 @@
+{
+  "id": "bug-paginate",
+  "category": "bug",
+  "web": false,
+  "budget_s": 400,
+  "budget_usd": 2,
+  "prompt": "User report: with 25 items and 10 per page, page 3 comes back empty and the UI shows only 2 pages. Fix paginate().",
+  "check": "python3 -m unittest -q test_pager",
+  "hidden_cmd": "python3 -m unittest -q test_pager test_hidden"
+}

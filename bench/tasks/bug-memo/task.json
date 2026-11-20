@@ -1,0 +1,10 @@
+{
+  "id": "bug-memo",
+  "category": "bug",
+  "web": false,
+  "budget_s": 600,
+  "budget_usd": 3,
+  "prompt": "Bug report: @memoize returns wrong results when a function is called with keyword arguments in different orders, e.g. area(w=2, h=3) after area(h=2, w=3). Fix memo.py so it meets its docstring.",
+  "check": "python3 -m unittest -q test_memo",
+  "hidden_cmd": "python3 -m unittest -q test_memo test_hidden"
+}

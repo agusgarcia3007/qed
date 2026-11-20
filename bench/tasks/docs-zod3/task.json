@@ -1,0 +1,11 @@
+{
+  "id": "docs-zod3",
+  "category": "docs",
+  "web": true,
+  "budget_s": 600,
+  "budget_usd": 3,
+  "setup": "npm ci --silent",
+  "prompt": "In user.js export `SignupSchema` (a zod schema) and `parseSignup(input)`. Fields: email (valid email, normalized to lowercase); password (at least 12 chars, error message exactly 'password too short'); age (optional integer >= 13, error message exactly 'too young'); tags (array of unique non-empty strings, defaults to [], duplicate error message exactly 'duplicate tag'). parseSignup returns {ok: true, data} or {ok: false, errors} where errors maps each failing field name to its first error message. Use the zod version this project has installed.",
+  "check": "node --test",
+  "hidden_cmd": "node --test"
+}

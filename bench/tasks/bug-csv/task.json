@@ -1,0 +1,10 @@
+{
+  "id": "bug-csv",
+  "category": "bug",
+  "web": false,
+  "budget_s": 600,
+  "budget_usd": 3,
+  "prompt": "Bug report: rows exported from Excel with multi-line notes get split into several rows, and \"\" inside quoted fields shows up as two quote characters. Fix parse_csv in csvparse.py so it meets its docstring.",
+  "check": "python3 -m unittest -q test_csvparse",
+  "hidden_cmd": "python3 -m unittest -q test_csvparse test_hidden"
+}

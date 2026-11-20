@@ -1,0 +1,10 @@
+{
+  "id": "short-slug",
+  "category": "short",
+  "web": false,
+  "budget_s": 300,
+  "budget_usd": 2,
+  "prompt": "Add a function `slugify(s)` to text.py: lowercase; every run of whitespace, underscores and hyphens becomes a single '-'; drop every character that is not a-z, 0-9 or '-'; no leading or trailing '-'. Example: slugify('  Hello, World_2026 ') == 'hello-world-2026'.",
+  "check": "python3 -m unittest -q test_text",
+  "hidden_cmd": "python3 -m unittest -q test_text test_hidden"
+}
