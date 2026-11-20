@@ -50,6 +50,7 @@ These are small samples. Treat them as a pilot, not a verdict. The tasks and scr
 - The status line shows model, effort, cost, and **context in use**, for example `ctx 23k/200k (12%)`. The spinner updates it live during a turn.
 - `/goal <objective>` keeps taking turns until the model reports the goal met (up to 5).
 - `/undo` puts the files back as they were before the last turn.
+- `/subagents on` (or `--subagents`, or `"subagents": true` in config) offers Claude Code's subagents: the built-in Explore, general-purpose and Plan agents, plus the project's `.claude/agents`. Off by default, because the tool adds about 2.3k prompt tokens to every request. When it's on, qed runs subagents inline rather than in the background, so their report comes back within the same turn. The protocol limits them to broad exploration: no delegated edits, and a subagent's report doesn't count as evidence. Checks they run are still recorded. Measure it on your tasks with `qed eval … --variants C,C+sub`.
 - `/perm ask` asks before shell commands and web fetches. Edits and `qed check` still run on their own.
 - Also available: `/check`, `/model`, `/effort`, `/diff`, `/cost`, `/resume`, `!cmd` for the shell, and your skills via `/name`. `/help` lists them all.
 

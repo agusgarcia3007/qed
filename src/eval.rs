@@ -97,8 +97,11 @@ fn reset(ws: &Path) {
 
 fn cfg_for(t: &Task, base: &Cfg, variant: &str) -> (Cfg, Mode) {
     let mut c = base.clone();
-    // "NAME@effort" overrides the effort; "DEEPk" = min mode with k parallel candidates.
-    let (variant, effort) = variant
+    // "NAME@effort" overrides the effort; "DEEPk" = min mode with k parallel candidates;
+    // "NAME+sub" turns on Claude Code's subagents (e.g. C+sub, C+sub@high).
+    let plain = variant.replace("+sub", "");
+    c.subagents = plain != variant;
+    let (variant, effort) = plain
         .split_once('@')
         .map(|(v, e)| (v, Some(e)))
         .unwrap_or((variant, None));
@@ -240,7 +243,7 @@ fn pct(v: &mut [u64], p: f64) -> u64 {
 pub fn main(args: &[String], cwd: &Path) -> i32 {
     let Some(tasks_dir) = args.first().map(|a| cwd.join(a)) else {
         eprintln!(
-            "usage: qed eval TASKS [--variants A,B,C,D] [--repeat N] [--out DIR] [--only id,...]"
+            "usage: qed eval TASKS [--variants A,B,C,D,C+sub] [--repeat N] [--out DIR] [--only id,...]"
         );
         return 2;
     };

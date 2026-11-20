@@ -91,7 +91,10 @@ pub fn tool_line(name: &str, i: &Value) -> String {
             format!("~ {} +{} −{}", rel(s("file_path")), a, d)
         }
         "TodoWrite" => "plan updated".into(),
-        "Task" | "Agent" => format!("subagent {}", s("description")),
+        "Task" | "Agent" => match s("subagent_type") {
+            "" | "general-purpose" => format!("subagent {}", s("description")),
+            t => format!("subagent {} · {}", t, s("description")),
+        },
         n => n.to_string(),
     }
 }

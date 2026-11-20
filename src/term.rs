@@ -49,6 +49,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/critic", "independent reviewer on/off"),
     ("/alt", "alternative branch on/off"),
     ("/web", "web search on/off"),
+    ("/subagents", "Claude Code subagents (Explore…) on/off"),
     ("/goal", "keep working until an objective is met · /goal clear"),
     ("/undo", "revert the files changed by the last turn"),
     ("/perm", "ask before shell/web · auto"),
@@ -285,7 +286,7 @@ pub fn suggest(buf: &str) -> Vec<(String, String)> {
         "/model" => MODELS,
         "/effort" => EFFORTS,
         "/mode" => &["native", "min", "adaptive"],
-        "/critic" | "/alt" | "/web" => &["on", "off"],
+        "/critic" | "/alt" | "/web" | "/subagents" => &["on", "off"],
         "/perm" => &["ask", "auto"],
         "/goal" => &["clear"],
         "/check" => &["off"],
@@ -339,6 +340,7 @@ fn takes_arg(cmd: &str) -> bool {
             | "/critic"
             | "/alt"
             | "/web"
+            | "/subagents"
             | "/fresh"
             | "/perm"
             | "/goal"

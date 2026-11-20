@@ -25,11 +25,11 @@ const HELP: &str = "qed — minimal harness over Claude Code
   qed check [-t SECS] -- CMD  run a check and record it bound to the exact code state
   qed status [id]             evidence and which checks are still valid
   qed logo                    ∎ (QED_LOGO=1 also animates it on startup)
-  qed eval TASKS [--variants A,B,C,D,D-nocritic,D-noalt] [--repeat N] [--out DIR]
+  qed eval TASKS [--variants A,B,C,D,D-nocritic,D-noalt,C+sub] [--repeat N] [--out DIR]
 
 flags: --mode native|min|adaptive  --check CMD  --setup CMD  --model M  --effort E
        --budget-s N  --budget-usd N  --candidates N (deep mode)  --no-critic  --no-alt  --no-web  --full (load user MCP/skills)
-       --fresh (new session with a continuation packet)  --json
+       --subagents (Claude Code's Agent tool: Explore etc.)  --fresh (new session with a continuation packet)  --json
 config: .qed/config.json with the same keys (check, setup, model, effort, budget_s, ...)";
 
 extern "C" fn on_sigint(_: libc::c_int) {
@@ -142,6 +142,9 @@ pub fn apply_cfg(c: &mut Cfg, v: &Value) {
     if let Some(x) = v["ask"].as_bool() {
         c.ask = x
     }
+    if let Some(x) = v["subagents"].as_bool() {
+        c.subagents = x
+    }
 }
 
 pub fn parse_mode(s: &str) -> Option<Mode> {
@@ -223,6 +226,7 @@ fn parse(args: &[String], root: &Path) -> Result<Cli, String> {
             }
             "--full" => c.cfg.lean = false,
             "--ask" => c.cfg.ask = true,
+            "--subagents" => c.cfg.subagents = true,
             "--candidates" | "-k" => {
                 c.cfg.candidates = val(&mut i)?
                     .parse::<usize>()
@@ -475,9 +479,10 @@ fn print_config(cli: &Cli) {
         ("critic", on_off_s(c.critic).into()),
         ("alt", on_off_s(c.alt).into()),
         ("web", on_off_s(c.web).into()),
+        ("subagents", on_off_s(c.subagents).into()),
     ];
     for (k, v) in rows {
-        println!("  \x1b[2m{:<8}\x1b[0m {}", k, v);
+        println!("  \x1b[2m{:<9}\x1b[0m {}", k, v);
     }
 }
 
@@ -741,6 +746,13 @@ fn repl_loop(mut cli: Cli, root: &Path, mut sess: Option<Session>) -> i32 {
                 let base = cli.cfg.tools.split(',').filter(|t| !t.starts_with("Web")).collect::<Vec<_>>().join(",");
                 cli.cfg.tools = if cli.cfg.web { format!("{},WebSearch,WebFetch", base) } else { base };
                 dim(&format!("web {}", on_off_s(cli.cfg.web)));
+            }
+            "/subagents" => {
+                cli.cfg.subagents = on_off(arg, cli.cfg.subagents);
+                dim(&format!(
+                    "subagents {}",
+                    if cli.cfg.subagents { "on · Explore etc. for broad searches; ~2.3k more prompt tokens per request" } else { "off" }
+                ));
             }
             "/config" => print_config(&cli),
             "/perm" => {

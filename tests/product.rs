@@ -369,6 +369,43 @@ fn web_tools_default_on_and_removable() {
     );
 }
 
+fn argv_after(c: &Value, flag: &str) -> Option<String> {
+    let a: Vec<&str> = c["argv"].as_array()?.iter().filter_map(|a| a.as_str()).collect();
+    a.get(a.iter().position(|x| *x == flag)? + 1).map(|s| s.to_string())
+}
+
+#[test]
+fn subagents_are_opt_in_and_their_checks_count() {
+    let d = repo("subagents");
+    qed(&d, "short", &["-p", "x"], &[]);
+    let o = qed(&d, "subagent", &["-p", "x", "--subagents"], &[]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let log = fake_log(&d);
+    // Off by default: the Agent tool costs ~2.3k prompt tokens per request.
+    assert!(!argv_after(&log[0], "--tools").unwrap().contains("Agent"));
+    assert!(!argv_after(&log[0], "--append-system-prompt").unwrap().contains("Subagents"));
+    // On: the tool is offered and allowed, and the protocol says when it pays off.
+    assert!(argv_after(&log[1], "--tools").unwrap().split(',').any(|t| t == "Agent"));
+    assert!(argv_after(&log[1], "--allowedTools").unwrap().split(',').any(|t| t == "Agent"));
+    assert!(argv_after(&log[1], "--append-system-prompt").unwrap().contains("Subagents"));
+    // Inline, not backgrounded: the report must arrive inside the same turn.
+    assert!(log[0]["bg_off"].is_null());
+    assert_eq!(log[1]["bg_off"], "1");
+    // The subagent's voice stays out of the main stream; its tool calls too.
+    let evs = events(&o);
+    assert!(!evs.iter().any(|e| e["ev"] == "text" && e["text"] == "SUBVOICE"));
+    assert_eq!(evs.iter().filter(|e| e["ev"] == "tool").count(), 1);
+    // A check run by the subagent is recorded into the same session, bound to the tree.
+    assert!(ledger(&d)
+        .iter()
+        .any(|e| e["by"] == "model" && e["cmd"] == "python3 test.py" && e["exit"] != 0));
+    // The config key works too.
+    fs::create_dir_all(d.join(".qed")).unwrap();
+    fs::write(d.join(".qed/config.json"), r#"{"subagents": true}"#).unwrap();
+    qed(&d, "short", &["-p", "x"], &[]);
+    assert!(argv_after(fake_log(&d).last().unwrap(), "--tools").unwrap().contains("Agent"));
+}
+
 #[test]
 fn interactive_repl_in_a_real_pty() {
     let d = repo("pty");

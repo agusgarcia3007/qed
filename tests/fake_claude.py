@@ -17,6 +17,7 @@ def log(prompt):
     if os.environ.get("FAKE_LOG"):
         with open(os.environ["FAKE_LOG"], "a") as f:
             f.write(json.dumps({"argv": argv, "cwd": cwd, "prompt": prompt, "critic": critic,
+                                "bg_off": os.environ.get("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"),
                                 "pid": os.getpid(), "age": round(time.time() - STARTED, 3)}) + "\n")
 
 INTERRUPT = threading.Event()
@@ -152,6 +153,21 @@ def turn(prompt):
             out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "p", "content": a.get("message", "denied"), "is_error": True}]}})
             text("no me dejaron")
         result("fin")
+    elif mode == "subagent":
+        # Like Claude Code's Agent tool: the child's traffic carries parent_tool_use_id.
+        out({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "s", "name": "Task",
+            "input": {"description": "find callers", "subagent_type": "Explore", "prompt": "find add()"}}]}})
+        out({"type": "stream_event", "parent_tool_use_id": "s",
+             "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "SUBVOICE"}}})
+        out({"type": "assistant", "parent_tool_use_id": "s", "message": {"content": [
+            {"type": "tool_use", "id": "sb", "name": "Bash", "input": {"command": "qed check -- python3 test.py"}}]}})
+        subprocess.run("qed check -- python3 test.py", shell=True, capture_output=True)
+        out({"type": "user", "parent_tool_use_id": "s", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "sb", "content": "exit 1", "is_error": True}]}})
+        out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "s",
+            "content": [{"type": "text", "text": "calc.py:2 subtracts"}], "is_error": False}]}})
+        text("encontrado")
+        result("encontrado")
     elif mode == "goal":
         # Not met on the first turn, met on the second.
         n = len(open(os.environ["FAKE_LOG"]).read().splitlines()) if os.environ.get("FAKE_LOG") else 1

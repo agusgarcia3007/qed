@@ -182,6 +182,13 @@ fn build_cmd(o: &Opts, stream_in: bool) -> Command {
     if let Some(sd) = &o.session_dir {
         c.env("QED_SESSION", sd);
     }
+    // Claude Code 2.1.x backgrounds subagents by default: the turn's `result` arrives
+    // while the subagent still works, and a second turn reports it later (one wasted
+    // request, and in the live process it would land in the next turn). Inline subagents
+    // return their report as the tool result, inside the same turn.
+    if o.tools.split(',').any(|t| t == "Agent" || t == "Task") {
+        c.env("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1");
+    }
     c.current_dir(&o.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
