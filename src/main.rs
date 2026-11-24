@@ -6,6 +6,7 @@ mod run;
 mod store;
 mod term;
 mod ui;
+mod update;
 
 use engine::{Emitter, Out, CANCEL};
 use run::{Cfg, Mode};
@@ -19,11 +20,14 @@ use term::{EFFORTS, MODELS};
 const HELP: &str = "qed — minimal harness over Claude Code
 
   qed                         interactive (launches nothing until the first prompt)
-  qed \"task\"                  one task, human-readable output
+  qed \"task\"                  interactive session that starts with this task
+                              (one task and exit when not on a terminal)
   qed -p \"task\" | -p -        headless: one JSON event per line (prompt from stdin with -)
   qed resume [id] | qed -c    resume a session (no id: pick with ↑↓; -c: the last one)
   qed check [-t SECS] -- CMD  run a check and record it bound to the exact code state
   qed status [id]             evidence and which checks are still valid
+  qed update | qed upgrade    install the latest release (the REPL also does it in the
+                              background and offers /restart; QED_NO_UPDATE=1 turns it off)
   qed logo                    ∎ (QED_LOGO=1 also animates it on startup)
   qed eval TASKS [--variants A,B,C,D,D-nocritic,D-noalt,C+sub] [--repeat N] [--out DIR]
 
@@ -60,12 +64,14 @@ fn boot_us() -> u64 {
 
 fn main() {
     START.get_or_init(std::time::Instant::now);
+    update::init();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cwd = std::env::current_dir().expect("cwd");
     match args.first().map(String::as_str) {
         Some("-h") | Some("--help") => println!("{}", HELP),
         Some("-V") | Some("--version") => println!("qed {}", env!("CARGO_PKG_VERSION")),
         Some("logo") => logo::play(),
+        Some("update") | Some("upgrade") => std::process::exit(update::cmd()),
         Some("check") => std::process::exit(cmd_check(&args[1..], &cwd)),
         Some("status") => cmd_status(&cwd, args.get(1).map(String::as_str)),
         Some("eval") => std::process::exit(eval::main(&args[1..], &cwd)),
@@ -144,6 +150,9 @@ pub fn apply_cfg(c: &mut Cfg, v: &Value) {
     }
     if let Some(x) = v["subagents"].as_bool() {
         c.subagents = x
+    }
+    if let Some(x) = v["autoupdate"].as_bool() {
+        c.autoupdate = x
     }
 }
 
@@ -270,7 +279,7 @@ fn cmd_main(args: &[String], cwd: &Path) -> i32 {
     if cli.pick && interactive {
         boot_us();
         return match choose_session(&root) {
-            Some(s) => repl(cli, &root, Some(s)),
+            Some(s) => repl(cli, &root, Some(s), None),
             None => 0,
         };
     }
@@ -285,10 +294,15 @@ fn cmd_main(args: &[String], cwd: &Path) -> i32 {
         None => None,
     };
     if let Some(p) = cli.prompt.clone() {
+        // On a terminal, `qed "task"` opens a session that starts with the task and stays
+        // open for follow-ups. Piped or -p: one task, then exit.
+        if cli.out == Out::Human && term::is_tty() {
+            return repl(cli, &root, sess, Some(p));
+        }
         let ok = one(&cli, &root, &mut sess, &p);
         return if ok { 0 } else { 1 };
     }
-    repl(cli, &root, sess)
+    repl(cli, &root, sess, None)
 }
 
 /// Run one prompt as a task on (possibly new) session `sess`. Returns whether it ended cleanly.
@@ -609,14 +623,17 @@ fn prewarm(cli: &mut Cli, root: &Path, sess: &Option<Session>) {
     run::prewarm(&cli.cfg, cli.mode, root, &dir, resume);
 }
 
-fn repl(cli: Cli, root: &Path, sess: Option<Session>) -> i32 {
+fn repl(cli: Cli, root: &Path, sess: Option<Session>, first: Option<String>) -> i32 {
     engine::PERSIST.store(true, std::sync::atomic::Ordering::SeqCst);
-    let code = repl_loop(cli, root, sess);
+    if term::is_tty() {
+        update::background(cli.cfg.autoupdate);
+    }
+    let code = repl_loop(cli, root, sess, first);
     engine::shutdown();
     code
 }
 
-fn repl_loop(mut cli: Cli, root: &Path, mut sess: Option<Session>) -> i32 {
+fn repl_loop(mut cli: Cli, root: &Path, mut sess: Option<Session>, first: Option<String>) -> i32 {
     // One quiet line, measured from process start. The logo animation is opt-in
     // (`qed logo`, /logo, QED_LOGO=1) so opening qed never waits on it.
     let boot = boot_us();
@@ -631,8 +648,15 @@ fn repl_loop(mut cli: Cli, root: &Path, mut sess: Option<Session>) -> i32 {
     let tty = term::is_tty();
     let mut hist = term::history();
     let mut prefill = String::new();
-    let mut pending: Vec<String> = Vec::new();
+    let mut pending: Vec<String> = first.into_iter().collect();
+    let mut announced = false;
     loop {
+        if !announced {
+            if let Some(v) = update::READY.lock().ok().and_then(|r| r.clone()) {
+                announced = true;
+                println!("{}↑{} {}qed {} installed · /restart to use it{}", ui::ACCENT, ui::RST, ui::DIM, v, ui::RST);
+            }
+        }
         // Start the next turn's Claude Code process while the person types.
         if pending.is_empty() {
             prewarm(&mut cli, root, &sess);
@@ -646,7 +670,7 @@ fn repl_loop(mut cli: Cli, root: &Path, mut sess: Option<Session>) -> i32 {
             true => {
                 if let Ok(mut f) = term::FOOTER.lock() {
                     *f = format!(
-                        "{}{} · {} · {}{}{}{}   / commands · ! shell · esc cancels",
+                        "{}{} · {} · {}{}{}{}{}   / commands · ! shell · esc cancels",
                         sess.as_ref()
                             .and_then(|s| s.meta["objective"].as_str())
                             .filter(|_| sess.as_ref().is_some_and(|s| s.meta["objective_status"] == "active"))
@@ -664,6 +688,12 @@ fn repl_loop(mut cli: Cli, root: &Path, mut sess: Option<Session>) -> i32 {
                             .and_then(|s| s.meta["cost_usd"].as_f64())
                             .filter(|c| *c > 0.0)
                             .map(|c| format!(" · {}", ui::money(c)))
+                            .unwrap_or_default(),
+                        update::READY
+                            .lock()
+                            .ok()
+                            .and_then(|r| r.clone())
+                            .map(|v| format!(" · ↑ {} /restart", v))
                             .unwrap_or_default()
                     );
                 }
@@ -791,6 +821,7 @@ fn repl_loop(mut cli: Cli, root: &Path, mut sess: Option<Session>) -> i32 {
                 }
             }
             "/logo" => logo::play(),
+            "/restart" => restart(&cli, &sess),
             "/new" => {
                 sess = None;
                 cli.next_id = None;
@@ -859,6 +890,30 @@ fn repl_loop(mut cli: Cli, root: &Path, mut sess: Option<Session>) -> i32 {
             prefill = std::mem::take(&mut *t);
         }
     }
+}
+
+/// Replace this process with the installed binary (a fresh build or an update), carrying
+/// on the current session with the same model and effort.
+fn restart(cli: &Cli, sess: &Option<Session>) {
+    use std::os::unix::process::CommandExt;
+    engine::shutdown();
+    let mut args: Vec<String> = Vec::new();
+    if let Some(s) = sess {
+        args.extend(["resume".into(), s.id()]);
+    }
+    args.extend(["--model".into(), cli.cfg.model.clone(), "--effort".into(), cli.cfg.effort.clone()]);
+    if !cli.cfg.lean {
+        args.push("--full".into());
+    }
+    if cli.cfg.subagents {
+        args.push("--subagents".into());
+    }
+    if cli.cfg.ask {
+        args.push("--ask".into());
+    }
+    let _ = std::io::stdout().flush();
+    let err = std::process::Command::new(update::exe()).args(&args).exec();
+    dim(&format!("restart failed: {}", err));
 }
 
 fn cmd_check(args: &[String], cwd: &Path) -> i32 {

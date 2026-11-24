@@ -7,17 +7,20 @@ qed runs `claude -p` with your normal Claude Code login and adds three things. I
 ## Quick start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/agusgarcia3007/qed/main/install.sh | sh
+curl -fsSL https://qed.pages.dev/install | sh
 # prebuilt binary for macOS/Linux (x86_64, arm64) into ~/.local/bin; falls back to cargo.
-# needs the `claude` CLI, logged in. Options: QED_VERSION=v0.1.0, QED_INSTALL_DIR=/usr/local/bin
+# needs the `claude` CLI, logged in. Options: QED_VERSION=v0.2.0, QED_INSTALL_DIR=/usr/local/bin
 # or: cargo install --git https://github.com/agusgarcia3007/qed --locked
 
 qed                                   # interactive
-qed "fix the pagination bug" --check "pytest -q"
+qed "fix the pagination bug" --check "pytest -q"   # a session that starts with this task
 qed -p "..."                          # headless: one JSON event per line
 qed resume                            # pick up a past session
 qed status                            # which checks still hold on the current code
+qed update                            # install the latest release (alias: qed upgrade)
 ```
+
+The REPL also checks for a new release in the background (at most hourly), installs it, and shows `↑ <version> /restart`. `/restart` reopens qed on the same session. Turn it off with `QED_NO_UPDATE=1` or `"autoupdate": false` in `.qed/config.json`. Updates are checked against the release's `SHA256SUMS`, and binaries built from a checkout are never replaced.
 
 ## Why use it
 
@@ -50,6 +53,8 @@ These are small samples. Treat them as a pilot, not a verdict. The tasks and scr
 ## In the REPL
 
 - **Esc** cancels the turn, and the session stays resumable. Anything you type while the agent works is queued.
+- Long input wraps into rows under the prompt as you type. `\` + Enter adds a new line.
+- When a background task Claude Code started finishes between turns, its reply is shown before your next message is answered, so answers never shift by one turn.
 - The status line shows model, effort, cost, and **context in use**, for example `ctx 23k/200k (12%)`. The spinner updates it live during a turn.
 - `/goal <objective>` keeps taking turns until the model reports the goal met (up to 5).
 - `/undo` puts the files back as they were before the last turn.

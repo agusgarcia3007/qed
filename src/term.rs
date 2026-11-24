@@ -60,6 +60,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("/diff", "session changes"),
     ("/cost", "session cost"),
     ("/fresh", "new session with summarized context"),
+    ("/restart", "restart qed (picks up an update, keeps the session)"),
     ("/logo", "∎"),
     ("/help", "help"),
     ("/quit", "quit"),
@@ -543,17 +544,55 @@ const PLACEHOLDER: &str = "task, /command or !shell";
 
 const MENU_MAX: usize = 8;
 
-fn redraw(v: &View, buf: &[char], cur: usize) {
-    // shortcut: assumes 1 column per char (CJK/emoji misalign); fine for a prompt line.
+/// Lay the input out in rows of `w` columns: the first row follows the prompt, the rest
+/// line up under it; a newline in the text starts a row. Returns the rows and the
+/// cursor's (row, column).
+fn layout(buf: &[char], cur: usize, w: usize) -> (Vec<String>, usize, usize) {
+    let w = w.max(1);
+    let mut rows = vec![String::new()];
+    let (mut col, mut at) = (0usize, (0usize, 0usize));
+    for (i, &c) in buf.iter().enumerate() {
+        if i == cur {
+            at = (rows.len() - 1, col);
+        }
+        if c == '\n' {
+            rows.push(String::new());
+            col = 0;
+            continue;
+        }
+        let cw = crate::ui::dw(c.encode_utf8(&mut [0; 4])).max(1);
+        if col + cw > w {
+            rows.push(String::new());
+            col = 0;
+            if i == cur {
+                at = (rows.len() - 1, 0);
+            }
+        }
+        rows.last_mut().unwrap().push(c);
+        col += cw;
+    }
+    if cur >= buf.len() {
+        at = (rows.len() - 1, col);
+        if col >= w {
+            // Never park the cursor in the pending-wrap column: start the next row.
+            rows.push(String::new());
+            at = (rows.len() - 1, 0);
+        }
+    }
+    (rows, at.0, at.1)
+}
+
+/// Redraw the input block (and the menu or footer under it). `up` holds the row the
+/// cursor was left on, relative to the block's first row, so the next redraw starts there.
+fn redraw(v: &View, buf: &[char], cur: usize, up: &mut usize) {
     let tw = width();
     let w = tw.saturating_sub(v.plen + 1).max(10);
-    let shown: Vec<char> = buf
-        .iter()
-        .map(|&c| if c == '\n' { '⏎' } else { c })
-        .collect();
-    let start = cur.saturating_sub(w.saturating_sub(1));
-    let end = (start + w).min(shown.len());
-    let vis: String = shown[start..end].iter().collect();
+    let (rows, crow, ccol) = layout(buf, cur, w);
+    let n = v.menu.len().min(MENU_MAX);
+    // A very long input shows the rows around the cursor, leaving room for the menu.
+    let fit = height().saturating_sub(n + 3).max(3);
+    let first_row = if rows.len() > fit { (crow + 1).saturating_sub(fit).min(rows.len() - fit) } else { 0 };
+    let shown = &rows[first_row..rows.len().min(first_row + fit)];
     // Ghost text: the rest of the selected completion, dimmed after the cursor.
     let typed: String = buf.iter().collect();
     let ghost = match v.menu.get(v.sel) {
@@ -562,12 +601,22 @@ fn redraw(v: &View, buf: &[char], cur: usize) {
         _ => String::new(),
     };
     let mut o = std::io::stdout().lock();
-    let _ = write!(
-        o,
-        "\r\x1b[2K{}{}\x1b[2m{}\x1b[0m\x1b[J",
-        v.prompt, vis, ghost
-    );
-    let n = v.menu.len().min(MENU_MAX);
+    if *up > 0 {
+        let _ = write!(o, "\x1b[{}A", *up);
+    }
+    let _ = write!(o, "\r\x1b[J");
+    let pad = " ".repeat(v.plen);
+    for (i, r) in shown.iter().enumerate() {
+        let lead = if first_row + i == 0 { v.prompt } else { pad.as_str() };
+        if i > 0 {
+            let _ = write!(o, "\r\n");
+        }
+        let _ = write!(o, "{}{}", lead, r);
+        if i == shown.len() - 1 && !ghost.is_empty() {
+            let room = w.saturating_sub(crate::ui::dw(r));
+            let _ = write!(o, "\x1b[2m{}\x1b[0m", crate::ui::fit(&ghost, room));
+        }
+    }
     let first = v.sel.saturating_sub(MENU_MAX - 1);
     let nw = v
         .menu
@@ -578,7 +627,7 @@ fn redraw(v: &View, buf: &[char], cur: usize) {
         .max()
         .unwrap_or(0)
         .clamp(12, 28);
-    let mut rows = 0;
+    let mut below = 0;
     for (i, (c, d)) in v.menu.iter().enumerate().skip(first).take(n) {
         let name = crate::ui::fit(c.rsplit(' ').next().unwrap_or(c), nw);
         let pad = " ".repeat(nw - crate::ui::dw(&name));
@@ -592,33 +641,37 @@ fn redraw(v: &View, buf: &[char], cur: usize) {
         } else {
             let _ = write!(o, "\r\n\x1b[2K  {}{}  \x1b[2m{}\x1b[0m", name, pad, d);
         }
-        rows += 1;
+        below += 1;
     }
     if v.menu.len() > n {
-        let below = v.menu.len() - first - n;
-        let msg = match (first, below) {
+        let rest = v.menu.len() - first - n;
+        let msg = match (first, rest) {
             (0, b) => format!("↓ {} more · type to filter", b),
             (a, 0) => format!("↑ {} more", a),
             (a, b) => format!("↑ {} · ↓ {} more", a, b),
         };
         let _ = write!(o, "\r\n\x1b[2K  \x1b[2m{}\x1b[0m", msg);
-        rows += 1;
+        below += 1;
     }
-    if rows == 0 && v.placeholder {
+    if below == 0 && v.placeholder {
         let f = FOOTER.lock().map(|f| f.clone()).unwrap_or_default();
         if !f.is_empty() {
             let _ = write!(o, "\r\n\x1b[2K  \x1b[2m{}\x1b[0m", crate::ui::fit(&f, tw.saturating_sub(3)));
-            rows = 1;
+            below = 1;
         }
     }
-    if rows > 0 {
-        let _ = write!(o, "\x1b[{}A", rows);
+    // Back to the cursor: up over the menu and the rows after the cursor's row.
+    let vrow = crow - first_row;
+    let back = below + (shown.len() - 1 - vrow);
+    if back > 0 {
+        let _ = write!(o, "\x1b[{}A", back);
     }
-    let col = v.plen + cur - start;
     let _ = write!(o, "\r");
+    let col = v.plen + ccol;
     if col > 0 {
         let _ = write!(o, "\x1b[{}C", col);
     }
+    *up = vrow;
     let _ = o.flush();
 }
 
@@ -645,6 +698,7 @@ pub fn read_line(
         }
     };
     let mut menu = menu_for(&buf, hidden);
+    let mut up = 0usize;
     redraw(
         &View {
             prompt,
@@ -655,6 +709,7 @@ pub fn read_line(
         },
         &buf,
         cur,
+        &mut up,
     );
     let res = loop {
         let Some(k) = key() else { break None };
@@ -738,7 +793,10 @@ pub fn read_line(
             Key::Right if cur < buf.len() => cur += 1,
             Key::Home | Key::Ctrl(b'a') => cur = 0,
             Key::End | Key::Ctrl(b'e') => cur = buf.len(),
-            Key::Ctrl(b'l') => print!("\x1b[2J\x1b[H"),
+            Key::Ctrl(b'l') => {
+                print!("\x1b[2J\x1b[H");
+                up = 0;
+            }
             Key::Up if hi > 0 => {
                 if hi == hist.len() {
                     draft = buf.clone();
@@ -778,6 +836,7 @@ pub fn read_line(
             },
             &buf,
             cur,
+            &mut up,
         );
     };
     // Final line without menu or ghost text.
@@ -791,6 +850,7 @@ pub fn read_line(
         },
         &buf,
         buf.len(),
+        &mut up,
     );
     print!("\x1b[?2004l\r\n");
     let _ = std::io::stdout().flush();
@@ -932,5 +992,37 @@ impl Drop for KeyWatch {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::layout;
+
+    fn chars(s: &str) -> Vec<char> {
+        s.chars().collect()
+    }
+
+    #[test]
+    fn long_input_wraps_into_rows() {
+        let b = chars("abcdefghij");
+        let (rows, r, c) = layout(&b, b.len(), 4);
+        assert_eq!(rows, ["abcd", "efgh", "ij"]);
+        assert_eq!((r, c), (2, 2));
+        // Cursor in the middle lands on its own row.
+        let (_, r, c) = layout(&b, 5, 4);
+        assert_eq!((r, c), (1, 1));
+    }
+
+    #[test]
+    fn newlines_start_rows_and_a_full_row_moves_the_cursor_down() {
+        let b = chars("ab\ncd");
+        let (rows, r, c) = layout(&b, b.len(), 10);
+        assert_eq!(rows, ["ab", "cd"]);
+        assert_eq!((r, c), (1, 2));
+        let b = chars("abcd");
+        let (rows, r, c) = layout(&b, 4, 4);
+        assert_eq!(rows, ["abcd", ""]);
+        assert_eq!((r, c), (1, 0));
     }
 }

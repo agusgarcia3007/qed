@@ -851,6 +851,29 @@ struct Live {
     total: f64,
     /// Spawned ahead of time and not sent anything yet: nothing to save, safe to kill.
     fresh: bool,
+    /// Lines read ahead (while checking for a turn Claude Code started on its own).
+    back: std::collections::VecDeque<String>,
+}
+
+impl Live {
+    fn next(&mut self, t: Duration) -> Result<String, mpsc::RecvTimeoutError> {
+        match self.back.pop_front() {
+            Some(l) => Ok(l),
+            None => self.rx.recv_timeout(t),
+        }
+    }
+}
+
+/// Output that belongs to a model turn (not just task bookkeeping): Claude Code starts a
+/// turn by itself when a background task finishes (task_notification, init, reply, result).
+fn starts_turn(line: &str) -> bool {
+    let Ok(v) = serde_json::from_str::<Value>(line) else { return false };
+    match v["type"].as_str().unwrap_or("") {
+        "system" => v["subtype"] == "task_notification" || v["subtype"] == "init",
+        "stream_event" | "assistant" | "user" | "result" => true,
+        "control_request" => true,
+        _ => false,
+    }
 }
 
 static LIVE: std::sync::Mutex<Option<Live>> = std::sync::Mutex::new(None);
@@ -893,7 +916,7 @@ fn spawn_live(o: &Opts) -> std::io::Result<Live> {
             }
         });
     }
-    Ok(Live { child, stdin, rx, err, sig: live_sig(o), session: o.resume.clone(), total: 0.0, fresh: true })
+    Ok(Live { child, stdin, rx, err, sig: live_sig(o), session: o.resume.clone(), total: 0.0, fresh: true, back: Default::default() })
 }
 
 /// Start the main author's process before the person sends the first prompt, so Claude
@@ -969,7 +992,42 @@ fn run_live(o: &Opts, prompt: &str, em: &mut Emitter) -> Turn {
     }
     let Some(mut l) = slot else { return turn };
     turn.spawn_ms = t0.elapsed().as_millis() as u64;
-    l.fresh = false;
+    // A process that was never sent anything has no turn of its own to report.
+    let used = !std::mem::replace(&mut l.fresh, false);
+
+    let turn_guard = TurnGuard::enter();
+    // A background task that finished after the last turn makes Claude Code answer on its
+    // own. That reply (waiting in the pipe, or still arriving) is shown as such and run to
+    // its result first; otherwise its result would end this turn with the previous answer.
+    if used {
+        loop {
+            while let Ok(x) = l.rx.try_recv() {
+                l.back.push_back(x);
+            }
+            if !l.back.iter().any(|x| starts_turn(x)) {
+                l.back.clear();
+                break;
+            }
+            em.emit(json!({"ev": "info", "msg": "a background task finished · Claude Code's reply:"}));
+            let mut bg = Turn::default();
+            let (got, alive) = read_turn(&mut l, o, em, &mut bg, t0);
+            if got {
+                // Cost is cumulative over the process: leaving l.total alone charges the
+                // background reply to this turn, so the session total stays right.
+                l.session = bg.session_id.clone().or(l.session.take());
+            }
+            if !got || !alive || bg.cancelled || bg.timed_out {
+                // The person's message is not sent: report the background turn as this one.
+                turn.cancelled = bg.cancelled;
+                turn.timed_out = bg.timed_out;
+                turn.cost = bg.cost;
+                turn.session_id = bg.session_id.clone();
+                drop(turn_guard);
+                return end_live(l, turn, em, t0, got, alive);
+            }
+        }
+    }
+
     let msg = json!({"type": "user", "message": {"role": "user", "content": prompt}});
     if writeln!(l.stdin, "{}", msg).and_then(|_| l.stdin.flush()).is_err() {
         stop(&mut l.child);
@@ -977,10 +1035,14 @@ fn run_live(o: &Opts, prompt: &str, em: &mut Emitter) -> Turn {
         turn.is_error = true;
         return turn;
     }
+    let (got_result, alive) = read_turn(&mut l, o, em, &mut turn, t0);
+    drop(turn_guard);
+    end_live(l, turn, em, t0, got_result, alive)
+}
 
-    let turn_guard = TurnGuard::enter();
-    let mut got_result = false;
-    let mut alive = true;
+/// Read one model turn from the live process up to its `result`, answering permission
+/// prompts and turning Esc / the deadline into an interrupt. Returns (got_result, alive).
+fn read_turn(l: &mut Live, o: &Opts, em: &mut Emitter, turn: &mut Turn, t0: Instant) -> (bool, bool) {
     // Interrupt requested at this instant (Esc or deadline): wait for the turn's result.
     let mut stopping: Option<Instant> = None;
     loop {
@@ -992,17 +1054,15 @@ fn run_live(o: &Opts, prompt: &str, em: &mut Emitter) -> Turn {
             stopping = Some(Instant::now());
             let req = json!({"type": "control_request", "request_id": format!("qed-{}", now_ms()), "request": {"subtype": "interrupt"}});
             if writeln!(l.stdin, "{}", req).and_then(|_| l.stdin.flush()).is_err() {
-                alive = false;
-                break;
+                return (false, false);
             }
         }
         if stopping.is_some_and(|s| s.elapsed() > Duration::from_secs(4)) {
             // The process did not wind the turn down: end it (SIGINT keeps --resume working).
             stop(&mut l.child);
-            alive = false;
-            break;
+            return (false, false);
         }
-        match l.rx.recv_timeout(Duration::from_millis(50)) {
+        match l.next(Duration::from_millis(50)) {
             Ok(line) if line.contains("\"can_use_tool\"") => {
                 let v: Value = serde_json::from_str(&line).unwrap_or_default();
                 if v["type"] == "control_request" {
@@ -1010,15 +1070,13 @@ fn run_live(o: &Opts, prompt: &str, em: &mut Emitter) -> Turn {
                     let resp = json!({"type": "control_response", "response": {
                         "subtype": "success", "request_id": v["request_id"], "response": answer}});
                     if writeln!(l.stdin, "{}", resp).and_then(|_| l.stdin.flush()).is_err() {
-                        alive = false;
-                        break;
+                        return (false, false);
                     }
                 }
             }
             Ok(line) => {
-                if handle(&line, &mut turn, em, t0) {
-                    got_result = true;
-                    break;
+                if handle(&line, turn, em, t0) {
+                    return (true, true);
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -1026,13 +1084,12 @@ fn run_live(o: &Opts, prompt: &str, em: &mut Emitter) -> Turn {
                     em.tick();
                 }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                alive = false;
-                break;
-            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => return (false, false),
         }
     }
-    drop(turn_guard);
+}
+
+fn end_live(mut l: Live, mut turn: Turn, em: &mut Emitter, t0: Instant, got_result: bool, alive: bool) -> Turn {
     if got_result {
         let total = turn.cost;
         turn.cost = (total - l.total).max(0.0);

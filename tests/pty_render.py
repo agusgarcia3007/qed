@@ -48,6 +48,10 @@ def check(cond, what, screen):
 # 1. One task rendered for a person.
 pid, fd = spawn(["explicá"], {"FAKE_MODE": "ui"})
 raw = read_for(fd, 8).decode(errors="replace")
+# On a terminal, `qed "task"` is a session: after the task it waits for a follow-up.
+alive = os.waitpid(pid, os.WNOHANG) == (0, 0)
+os.write(fd, b"\x04")
+raw += read_for(fd, 1.0).decode(errors="replace")
 os.waitpid(pid, 0)
 s = Screen(COLS)
 s.feed(raw)
@@ -67,6 +71,7 @@ check(not any("esc to cancel" in l for l in lines), "no spinner left on screen",
 check(any("return a + b" in l for l in lines) and any("return a - b" in l for l in lines),
       "an Edit shows its diff", txt)
 check(any("∎" in l for l in lines), "closing line", txt)
+check(alive and "› explicá" in txt, "qed \"task\" opens a session that starts with the task and stays open", txt)
 
 # 2. Completion with many skills (like a real ~/.claude/skills).
 for n in ["agent-browser", "copywriting", "frontend-design", "improve", "shadcn", "tanstack-start"] + \
@@ -101,6 +106,14 @@ t = typed("\x15/figma")
 check("/figma:figma-use" in t or "/figma-use" in t, "plugin skills are offered", t)
 t = typed("\x15/shad")
 check("❯ /shadcn" in t, "prefix match ranks first", t)
+long_in = " ".join(f"palabra{i:02d}" for i in range(16))  # 159 chars on a 60-column screen
+t = typed("\x15" + long_in)
+rows = [l for l in s.lines() if "palabra" in l]
+check(len(rows) >= 3 and all(len(l) <= COLS for l in s.lines())
+      and "".join(r[2:] for r in rows) == long_in,
+      "a long input grows downwards in rows under the prompt, nothing cut", t)
+t = typed("\x15corto")
+check(not any("palabra" in l for l in s.lines()) and "› corto" in t, "clearing it leaves no rows behind", t)
 os.write(fd, b"\x15\x04")
 read_for(fd, 0.5)
 
@@ -120,6 +133,17 @@ check(len(pids) == 3 and len(set(pids)) == 1, f"three turns, one claude process 
 ages = [json.loads(l)["age"] for l in open(log) if l.strip()] if os.path.exists(log) else []
 # The REPL waited ~1s before the first message: a prewarmed process is already that old.
 check(bool(ages) and ages[0] > 0.5, f"claude is prewarmed before the first prompt (age {ages[:1]})", "")
+# /restart replaces the process (same pid: exec) and carries on the same session.
+os.write(fd, b"/restart\r")
+scr3 = Screen(COLS)
+scr3.feed(read_for(fd, 1.5).decode(errors="replace"))
+t3 = scr3.text()
+check("↺" in t3 and "uno" in t3 and os.waitpid(pid, os.WNOHANG) == (0, 0),
+      "/restart reopens qed on the same session", t3)
+os.write(fd, b"cuatro\r")
+scr3.feed(read_for(fd, 2.0).decode(errors="replace"))
+sessions = [json.loads(l).get("argv", []) for l in open(log) if l.strip()]
+check(len(sessions) == 4 and "--resume" in sessions[-1], "the turn after /restart resumes the Claude Code session", scr3.text())
 os.write(fd, b"\x04")
 read_for(fd, 0.5)
 

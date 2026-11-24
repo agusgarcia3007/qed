@@ -565,6 +565,62 @@ fn deep_candidates_in_the_repl_use_their_own_processes() {
     }
 }
 
+/// A turn Claude Code starts by itself (a background task finished) must not be taken as
+/// the reply to the person's next message: each prompt gets its own answer.
+#[test]
+fn background_turn_does_not_shift_replies() {
+    let d = repo("bgturn");
+    let mut c = Command::new(env!("CARGO_BIN_EXE_qed"));
+    c.args(["--json"])
+        .current_dir(&d)
+        .env("QED_CLAUDE", fake())
+        .env("FAKE_MODE", "bgtask")
+        .env("FAKE_LOG", log_path(&d))
+        .env_remove("QED_SESSION")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    let mut child = c.spawn().unwrap();
+    {
+        use std::io::Write;
+        let mut si = child.stdin.take().unwrap();
+        writeln!(si, "uno").unwrap();
+        // The background turn arrives while the person is still typing the next prompt.
+        std::thread::sleep(Duration::from_millis(1500));
+        writeln!(si, "dos").unwrap();
+    }
+    let o = child.wait_with_output().unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    // Without a tty the REPL prints its "› " prompt on the same line as the next event.
+    let evs: Vec<Value> = out
+        .lines()
+        .filter_map(|l| serde_json::from_str(l.trim_start_matches("› ")).ok())
+        .collect();
+    // The second turn's own result comes after its own text, not the background one.
+    let last_start = evs.iter().rposition(|e| e["ev"] == "start").unwrap();
+    let texts: Vec<&str> = evs[last_start..]
+        .iter()
+        .filter(|e| e["ev"] == "text")
+        .filter_map(|e| e["text"].as_str())
+        .collect();
+    assert!(texts.contains(&"second"), "second prompt got no reply of its own: {:?}\n{}", texts, out);
+    let second = evs.iter().position(|e| e["text"] == "second").unwrap();
+    let bg = evs.iter().position(|e| e["text"] == "BACKGROUND DONE");
+    assert!(bg.is_some_and(|b| b < second), "background reply should be shown before: {}", out);
+    assert_eq!(count(&evs, "done"), 2, "{}", out);
+}
+
+#[test]
+fn update_replaces_the_binary_only_with_a_verified_release() {
+    let d = std::env::temp_dir().join(format!("qed-test-update-{}", std::process::id()));
+    let o = Command::new("python3")
+        .arg(format!("{}/tests/update_check.py", env!("CARGO_MANIFEST_DIR")))
+        .args([env!("CARGO_BIN_EXE_qed"), d.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(o.status.success(), "{}{}", out, String::from_utf8_lossy(&o.stderr));
+}
+
 #[test]
 fn what_a_person_sees_on_a_narrow_screen() {
     let d = repo("render");

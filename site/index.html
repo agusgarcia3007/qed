@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>qed ∎ — a small, fast harness around Claude Code</title>
+<meta name="description" content="qed runs Claude Code with a smaller context, records evidence for every check, and puts a quiet terminal UI on top.">
+<style>
+  :root { color-scheme: light dark; --fg:#111; --bg:#fafafa; --mute:#666; --box:#eee; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#eee; --bg:#111; --mute:#999; --box:#1e1e1e; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.6 ui-sans-serif,system-ui,sans-serif; }
+  main { max-width:680px; margin:0 auto; padding:72px 24px; }
+  h1 { font-size:2.4rem; margin:0 0 8px; }
+  p.lead { color:var(--mute); margin:0 0 32px; }
+  pre { background:var(--box); padding:14px 16px; border-radius:8px; overflow-x:auto; font:14px/1.5 ui-monospace,Menlo,monospace; }
+  h2 { font-size:1.1rem; margin-top:40px; }
+  ul { padding-left:20px; } li { margin:6px 0; }
+  a { color:inherit; }
+  footer { margin-top:56px; color:var(--mute); font-size:14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>qed ∎</h1>
+  <p class="lead">A small, fast harness around the official Claude Code CLI. It makes the agent show its work.</p>
+
+  <pre><code>curl -fsSL https://qed.pages.dev/install | sh</code></pre>
+  <p>Prebuilt binary for macOS and Linux (x86_64, arm64). Needs the <code>claude</code> CLI, logged in.</p>
+
+  <h2>Why</h2>
+  <ul>
+    <li><strong>Less context, lower cost.</strong> Skips user-level MCP servers, skills and settings by default. <code>--full</code> brings them back.</li>
+    <li><strong>Evidence instead of claims.</strong> Every <code>qed check</code> is tied to a hash of the exact working tree; edits make it stale.</li>
+    <li><strong>Fast.</strong> A 1.1 MB Rust binary, prompt ready in about 10 ms, one Claude Code process kept warm across turns.</li>
+  </ul>
+
+  <h2>Use</h2>
+  <pre><code>qed                                   # interactive
+qed "fix the pagination bug" --check "pytest -q"   # starts a session
+qed update                            # latest release
+qed -p "..."                          # headless, JSON events
+qed status                            # which checks still hold</code></pre>
+
+  <footer><a href="https://github.com/agusgarcia3007/qed">GitHub</a> · MIT licensed</footer>
+</main>
+</body>
+</html>

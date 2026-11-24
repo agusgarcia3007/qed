@@ -45,6 +45,8 @@ pub struct Cfg {
     /// Offer Claude Code's Agent tool (built-in Explore, general-purpose, Plan, plus the
     /// project's .claude/agents). Opt-in: the tool adds ~2.3k prompt tokens per request.
     pub subagents: bool,
+    /// REPL: install new releases in the background (offered with /restart).
+    pub autoupdate: bool,
 }
 
 impl Default for Cfg {
@@ -71,6 +73,7 @@ impl Default for Cfg {
             ask: false,
             live: true,
             subagents: false,
+            autoupdate: true,
         }
     }
 }

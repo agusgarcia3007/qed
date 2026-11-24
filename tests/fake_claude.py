@@ -196,6 +196,26 @@ def turn(prompt):
         time.sleep(0.3)
         text("hola")
         result("hola")
+    elif mode == "bgtask":
+        # Like Claude Code 2.1.x with a background Bash: after the turn's result, the task
+        # finishes and Claude Code starts a turn on its own (task_notification, init, reply,
+        # a second result) with nobody having written anything.
+        TURNS[0] += 1
+        if TURNS[0] == 1:
+            text("first")
+            result("first")
+            def later():
+                time.sleep(0.3)
+                out({"type": "system", "subtype": "task_notification", "task_id": "b1", "status": "completed"})
+                out({"type": "system", "subtype": "init", "session_id": sid, "tools": ["Bash"]})
+                text("BACKGROUND DONE")
+                result("BACKGROUND DONE")
+            threading.Thread(target=later, daemon=True).start()
+        else:
+            text("second")
+            result("second")
+
+TURNS = [0]
 
 
 if not STREAM:
