@@ -28,6 +28,10 @@ case "$arch" in
   arm64|aarch64) arch=aarch64 ;;
   *) arch="" ;;
 esac
+# Under Rosetta, uname reports x86_64 on Apple Silicon; prefer the native binary.
+if [ "$os" = apple-darwin ] && [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+  arch=aarch64
+fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
