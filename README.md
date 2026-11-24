@@ -7,7 +7,10 @@ qed runs `claude -p` with your normal Claude Code login and adds three things. I
 ## Quick start
 
 ```bash
-cargo install --path . --locked      # needs Rust and the `claude` CLI, logged in
+curl -fsSL https://raw.githubusercontent.com/agusgarcia3007/qed/main/install.sh | sh
+# prebuilt binary for macOS/Linux (x86_64, arm64) into ~/.local/bin; falls back to cargo.
+# needs the `claude` CLI, logged in. Options: QED_VERSION=v0.1.0, QED_INSTALL_DIR=/usr/local/bin
+# or: cargo install --git https://github.com/agusgarcia3007/qed --locked
 
 qed                                   # interactive
 qed "fix the pagination bug" --check "pytest -q"

@@ -1,6 +1,6 @@
 [package]
 name = "qed"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Minimal, fast coding harness over the official Claude Code CLI"
 license = "MIT"
